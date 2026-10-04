@@ -1054,3 +1054,28 @@ footer span:first-child {
   }
 
 }
+
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #a1a1aa;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.thinking-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #3f3f46;
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: thinkingSpin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes thinkingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

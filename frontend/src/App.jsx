@@ -627,22 +627,17 @@ function App() {
 
 
               {asking ? (
-
-                <div className="thinking">
-
-                  Searching your document
-                  and generating an answer...
-
-                </div>
-
-              ) : (
-
-                <p>
-                  {answer}
-                </p>
-
-              )}
-
+                  <div className="thinking">
+                    <span className="thinking-spinner"></span>
+                    <span>
+                      Searching your document and generating an answer...
+                    </span>
+                  </div>
+                ) : (
+                  <p>
+                    {answer}
+                  </p>
+                )}
 
             </div>
 
