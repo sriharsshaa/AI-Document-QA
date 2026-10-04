@@ -1,6 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
 from pydantic import BaseModel
 
 from pdf_processor import extract_pages_from_pdf
@@ -12,11 +11,26 @@ from vector_store import (
 )
 from rag import generate_answer
 
+from config import (
+    APP_TITLE,
+    APP_DESCRIPTION,
+    APP_VERSION,
+    UPLOAD_DIR,
+    SIMILARITY_THRESHOLD,
+    TOP_K,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP
+)
+
+
+# =========================
+# APPLICATION
+# =========================
 
 app = FastAPI(
-    title="AI Document Q&A API",
-    description="RAG-based document question answering system",
-    version="1.0.0"
+    title=APP_TITLE,
+    description=APP_DESCRIPTION,
+    version=APP_VERSION
 )
 
 
@@ -37,18 +51,10 @@ app.add_middleware(
 
 
 # =========================
-# CONFIGURATION
+# INITIALIZE UPLOAD DIRECTORY
 # =========================
 
-UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
-
-# Minimum cosine similarity required
-# for a chunk to be considered relevant.
-SIMILARITY_THRESHOLD = 0.20
-
-# Maximum number of chunks sent to the LLM.
-TOP_K = 3
 
 
 # =========================
@@ -90,7 +96,10 @@ async def upload_pdf(
     global document_chunks
     global vector_index
 
-    # Validate file type
+    # =========================
+    # VALIDATE FILE TYPE
+    # =========================
+
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=400,
@@ -130,8 +139,8 @@ async def upload_pdf(
 
         document_chunks = create_page_chunks(
             pages,
-            chunk_size=500,
-            overlap=100
+            chunk_size=CHUNK_SIZE,
+            overlap=CHUNK_OVERLAP
         )
 
         if not document_chunks:
@@ -217,19 +226,20 @@ def ask_question(
         # QUERY EXPANSION
         # =========================
 
-        # Start with the user's original question.
         retrieval_query = request.question
 
         question_lower = request.question.lower()
 
         # Improve retrieval for regulation labels.
         if "downregulated" in question_lower:
+
             retrieval_query += (
                 " regulation labels numerically encoded "
                 "Downregulated = -1"
             )
 
         elif "upregulated" in question_lower:
+
             retrieval_query += (
                 " regulation labels numerically encoded "
                 "Upregulated = 1"
@@ -237,6 +247,7 @@ def ask_question(
 
         # Improve retrieval for mean pooling questions.
         elif "mean pooling" in question_lower:
+
             retrieval_query += (
                 " converts variable-length representations "
                 "into fixed-size vectors"
@@ -244,6 +255,7 @@ def ask_question(
 
         # Improve retrieval for DNABERT-2 questions.
         elif "dnabert" in question_lower:
+
             retrieval_query += (
                 " gene DNA sequences transformer model "
                 "mean pooling"
@@ -251,6 +263,7 @@ def ask_question(
 
         # Improve retrieval for ChemBERTa questions.
         elif "chemberta" in question_lower:
+
             retrieval_query += (
                 " metabolite SMILES chemical structure "
                 "mean pooling"
@@ -310,7 +323,6 @@ def ask_question(
 
                 chunk = document_chunks[index]
 
-                # Store similarity internally.
                 chunk_with_score = {
                     **chunk,
                     "similarity": float(similarity)

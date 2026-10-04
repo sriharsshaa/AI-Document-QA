@@ -170,7 +170,4 @@ Documents are processed on the local machine, and the LLM runs through Ollama ra
 
 * Multi-document support
 * Chat history
-* Improved chunk overlap
-* Similarity threshold filtering
 * Better source highlighting
-* Persistent vector storage
