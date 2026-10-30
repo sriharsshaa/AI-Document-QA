@@ -1,787 +1,466 @@
-import { useEffect, useState } from "react";
+
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./App.css";
+
+function normalizeMarkdown(text = "") {
+  return text.replace(/\\([*_`])/g, "$1");
+}
 
 function App() {
   const [file, setFile] = useState(null);
-  const [question, setQuestion] = useState("");
-
+  const [documentUploaded, setDocumentUploaded] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] = useState("");
-
   const [asking, setAsking] = useState(false);
-  const [answer, setAnswer] = useState("");
-  const [sources, setSources] = useState([]);
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [question, setQuestion] = useState("");
+  const [messages, setMessages] = useState([]);
 
-  const [heroIndex, setHeroIndex] = useState(0);
+  const fileInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
-  const heroTexts = [
-    "Get answers from your documents.",
-    "Understand your documents faster.",
-    "Find information with AI.",
-    "Search your PDFs intelligently.",
-  ];
-
-  /*
-   * Change the hero text every 3 seconds.
-   */
   useEffect(() => {
-    const interval = setInterval(() => {
-      setHeroIndex((currentIndex) => {
-        return (currentIndex + 1) % heroTexts.length;
-      });
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-
-  /* =========================
-     FILE SELECTION
-  ========================= */
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+    });
+  }, [messages, asking]);
 
   const handleFileChange = (event) => {
-    const selectedFile = event.target.files[0];
+    const selectedFile = event.target.files?.[0];
 
-    if (selectedFile) {
-      setFile(selectedFile);
-      setUploadMessage("");
-      setAnswer("");
-      setSources([]);
-    }
-  };
+    if (!selectedFile) return;
 
-
-  /* =========================
-     UPLOAD PDF
-  ========================= */
-
-  const handleUpload = async () => {
-    if (!file) {
+    if (
+      selectedFile.type !== "application/pdf" &&
+      !selectedFile.name.toLowerCase().endsWith(".pdf")
+    ) {
+      setUploadMessage("Please select a PDF file.");
       return;
     }
+
+    setFile(selectedFile);
+    setDocumentUploaded(false);
+    setUploadMessage("");
+    setMessages([]);
+  };
+
+  const handleUpload = async () => {
+    if (!file || uploading || asking) return;
 
     setUploading(true);
     setUploadMessage("");
-    setAnswer("");
-    setSources([]);
 
     const formData = new FormData();
-
     formData.append("file", file);
 
     try {
-      const response = await fetch(
-        "http://localhost:8000/upload",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+      const response = await fetch("http://localhost:8000/upload", {
+        method: "POST",
+        body: formData,
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail || "Upload failed"
-        );
+        throw new Error(data.detail || "Upload failed.");
       }
 
-      setUploadMessage(
-        `Document processed successfully. ${data.pages} pages, ${data.chunks} chunks.`
-      );
+      setDocumentUploaded(true);
+      setMessages([
+        {
+          id: Date.now(),
+          role: "assistant",
+          content: `Your document **${file.name}** is ready! I've processed ${data.pages} pages and created ${data.chunks} searchable chunks. What would you like to know about it?`,
+          sources: [],
+        },
+      ]);
 
+      setUploadMessage("Document processed successfully.");
     } catch (error) {
-
-      setUploadMessage(
-        `Error: ${error.message}`
-      );
-
+      setDocumentUploaded(false);
+      setUploadMessage(`Error: ${error.message}`);
     } finally {
-
       setUploading(false);
-
     }
   };
 
+  const handleAsk = async (submittedQuestion = question) => {
+    const trimmedQuestion = submittedQuestion.trim();
 
-  /* =========================
-     ASK QUESTION
-  ========================= */
-
-  const handleAsk = async () => {
-
-    if (!question.trim()) {
+    if (
+      !documentUploaded ||
+      !trimmedQuestion ||
+      asking ||
+      uploading
+    ) {
       return;
     }
 
+    const userMessage = {
+      id: Date.now(),
+      role: "user",
+      content: trimmedQuestion,
+    };
+
+    setMessages((previous) => [...previous, userMessage]);
+    setQuestion("");
     setAsking(true);
-    setAnswer("");
-    setSources([]);
 
     try {
-
-      const response = await fetch(
-        "http://localhost:8000/ask",
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-          },
-
-          body: JSON.stringify({
-            question: question.trim(),
-          }),
-        }
-      );
+      const response = await fetch("http://localhost:8000/ask", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: trimmedQuestion,
+        }),
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-
-        throw new Error(
-          data.detail ||
-          "Failed to get answer"
-        );
-
+        throw new Error(data.detail || "Failed to get an answer.");
       }
 
-      setAnswer(data.answer);
-
-      setSources(
-        data.sources || []
-      );
-
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          content:
+            typeof data.answer === "string"
+              ? data.answer
+              : "The AI returned an invalid answer.",
+          sources: Array.isArray(data.sources) ? data.sources : [],
+        },
+      ]);
     } catch (error) {
-
-      setAnswer(
-        `Error: ${error.message}`
-      );
-
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          content: `Sorry, something went wrong: ${error.message}`,
+          sources: [],
+          isError: true,
+        },
+      ]);
     } finally {
-
       setAsking(false);
-
+      textareaRef.current?.focus();
     }
   };
 
+  const startNewChat = () => {
+    if (uploading || asking) return;
 
-  /* =========================
-     REMOVE FILE
-  ========================= */
-
-  const removeFile = () => {
-
-    setFile(null);
-
-    setUploadMessage("");
-
-    setAnswer("");
-
-    setSources("");
-
+    setMessages([]);
     setQuestion("");
+    setUploadMessage("");
+    setFile(null);
+    setDocumentUploaded(false);
 
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    handleAsk();
+  };
 
-  /* =========================
-     GROUP SOURCES
-  ========================= */
-
-  const groupedSources =
-    sources.reduce(
-      (groups, source) => {
-
-        const page = source.page;
-
-        if (!groups[page]) {
-          groups[page] = [];
-        }
-
-        groups[page].push(
-          source.text
-        );
-
-        return groups;
-
-      },
-      {}
-    );
-
+  const suggestions = [
+    "What is this document about?",
+    "Summarize the key points",
+    "Explain the main methodology",
+    "What are the important findings?",
+  ];
 
   return (
-
-    <div className="app">
-
-
-      {/* =========================
-          HEADER
-      ========================= */}
-
-      <header className="header">
-
-        <div className="logo">
-
-          <div className="logo-icon">
-            ✦
-          </div>
-
+    <div className="app-shell">
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-icon">✦</div>
           <div>
-
-            <h1>
-              DocuMind
-            </h1>
-
-            <span>
-              AI Document Q&A
-            </span>
-
+            <h1>DocuMind</h1>
+            <span>AI Document Assistant</span>
           </div>
-
         </div>
 
+        <button
+          className="new-chat-btn"
+          onClick={startNewChat}
+          disabled={uploading || asking}
+          type="button"
+        >
+          <span>＋</span> New chat
+        </button>
 
-        <div className="status">
+        <div className="sidebar-section">
+          <span className="sidebar-label">YOUR DOCUMENT</span>
 
-          <span className="status-dot"></span>
-
-          Local AI
-
-        </div>
-
-      </header>
-
-
-      {/* =========================
-          MAIN
-      ========================= */}
-
-      <main className="main">
-
-
-        {/* =========================
-            HERO
-        ========================= */}
-
-        <section className="hero">
-
-          <div className="badge">
-            ✨ Powered by RAG
-          </div>
-
-
-          <h2>
-
-            Ask questions.
-
-            <br />
-
-            <span
-              key={heroIndex}
-              className="hero-changing-text"
-            >
-              {heroTexts[heroIndex]}
-            </span>
-
-          </h2>
-
-
-          <p>
-            Upload a PDF and use AI to understand,
-            search, and ask questions about its content.
-          </p>
-
-        </section>
-
-
-        {/* =========================
-            WORKSPACE
-        ========================= */}
-
-        <div className="workspace">
-
-
-          {/* =========================
-              UPLOAD CARD
-          ========================= */}
-
-          <div className="card upload-card">
-
-
-            <div className="card-header">
-
-              <div className="card-icon">
-                ↑
-              </div>
-
-
-              <div>
-
-                <h3>
-                  Upload Document
-                </h3>
-
-                <p>
-                  Upload a PDF to start asking questions
-                </p>
-
-              </div>
-
-            </div>
-
-
-            {/* DROP ZONE */}
-
-            <label className="drop-zone">
-
-              <input
-                type="file"
-                accept=".pdf,application/pdf"
-                onChange={handleFileChange}
-              />
-
-
-              <div className="upload-icon">
-                ↑
-              </div>
-
-
+          <div className="document-panel">
+            <div className="document-icon">PDF</div>
+            <div className="document-details">
               <strong>
-
-                {file
-                  ? file.name
-                  : "Drop your PDF here"}
-
+                {file ? file.name : "No document uploaded"}
               </strong>
-
-
               <span>
-                or click to browse from your computer
+                {documentUploaded
+                  ? "Ready to chat"
+                  : file
+                    ? "Waiting for upload"
+                    : "Upload a PDF to begin"}
               </span>
+            </div>
+          </div>
 
-            </label>
+          <label className="sidebar-upload-btn">
+            <span>＋</span> Choose PDF
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              onChange={handleFileChange}
+              disabled={uploading || asking}
+            />
+          </label>
 
-
-            {/* SELECTED FILE */}
-
-            {file && (
-
-              <div className="selected-file">
-
-                <div className="file-icon">
-                  PDF
-                </div>
-
-
-                <div className="file-info">
-
-                  <strong>
-                    {file.name}
-                  </strong>
-
-
-                  <span>
-
-                    {(
-                      file.size /
-                      1024 /
-                      1024
-                    ).toFixed(2)}
-
-                    {" "}MB
-
-                  </span>
-
-                </div>
-
-
-                <button
-                  className="remove-btn"
-                  onClick={removeFile}
-                  type="button"
-                >
-                  ×
-                </button>
-
-              </div>
-
-            )}
-
-
-            {/* UPLOAD BUTTON */}
-
+          {file && !documentUploaded && (
             <button
-              className="primary-btn"
-              disabled={
-                !file ||
-                uploading
-              }
+              className="process-btn"
               onClick={handleUpload}
+              disabled={uploading || asking}
               type="button"
             >
-
-              {uploading
-                ? "Processing..."
-                : "Upload & Process"}
-
-
-              <span>
-
-                {uploading
-                  ? "..."
-                  : "→"}
-
-              </span>
-
+              {uploading ? "Processing document..." : "Upload & Process"}
             </button>
+          )}
 
-
-            {/* UPLOAD MESSAGE */}
-
-            {uploadMessage && (
-
-              <div className="upload-message">
-
-                {uploadMessage}
-
-              </div>
-
-            )}
-
-          </div>
-
-
-          {/* =========================
-              QUESTION CARD
-          ========================= */}
-
-          <div className="card question-card">
-
-
-            <div className="card-header">
-
-              <div className="card-icon">
-                ✦
-              </div>
-
-
-              <div>
-
-                <h3>
-                  Ask Your Document
-                </h3>
-
-
-                <p>
-                  Ask anything about the uploaded content
-                </p>
-
-              </div>
-
-            </div>
-
-
-            {/* QUESTION BOX */}
-
-            <div className="question-box">
-
-
-              <textarea
-
-                placeholder="What would you like to know?"
-
-                value={question}
-
-                onChange={(event) =>
-                  setQuestion(
-                    event.target.value
-                  )
-                }
-
-              />
-
-
-              <div className="question-footer">
-
-
-                <span>
-                  {question.length} characters
-                </span>
-
-
-                <button
-
-                  className="ask-btn"
-
-                  disabled={
-                    !question.trim() ||
-                    asking
-                  }
-
-                  onClick={handleAsk}
-
-                  type="button"
-
-                >
-
-                  {asking
-                    ? "Thinking..."
-                    : "Ask AI"}
-
-
-                  <span>
-
-                    {asking
-                      ? "..."
-                      : "↗"}
-
-                  </span>
-
-                </button>
-
-
-              </div>
-
-            </div>
-
-
-            {/* SUGGESTIONS */}
-
-            <div className="suggestions">
-
-
-              <span>
-                Try asking:
-              </span>
-
-
-              <button
-                type="button"
-                onClick={() =>
-                  setQuestion(
-                    "What is this document about?"
-                  )
-                }
-              >
-                What is this document about?
-              </button>
-
-
-              <button
-                type="button"
-                onClick={() =>
-                  setQuestion(
-                    "Summarize the key points"
-                  )
-                }
-              >
-                Summarize the key points
-              </button>
-
-
-            </div>
-
-          </div>
-
+          {uploadMessage && (
+            <p
+              className={
+                uploadMessage.startsWith("Error")
+                  ? "upload-status error"
+                  : "upload-status"
+              }
+              role="status"
+            >
+              {uploadMessage}
+            </p>
+          )}
         </div>
 
+        <div className="sidebar-bottom">
+          <div className="local-status">
+            <span className="status-dot" />
+            Local AI · Ollama
+          </div>
+          <span className="sidebar-version">DocuMind v1.0</span>
+        </div>
+      </aside>
 
-        {/* =========================
-            ANSWER SECTION
-        ========================= */}
+      {/* MAIN CHAT AREA */}
+      <main className="chat-main">
+        <header className="chat-header">
+          <div>
+            <h2>Document Chat</h2>
+            <p>
+              {documentUploaded
+                ? `Chatting with ${file?.name}`
+                : "Upload a document to start a conversation"}
+            </p>
+          </div>
 
-        {(answer || asking) && (
+          <div className="header-status">
+            <span className="status-dot" />
+            Local AI
+          </div>
+        </header>
 
-          <section className="answer-section">
+        <section className="chat-content">
+          {!documentUploaded && messages.length === 0 ? (
+            <div className="welcome-screen">
+              <div className="welcome-icon">✦</div>
 
+              <h2>What can I help you understand?</h2>
 
-            <div className="answer-header">
+              <p>
+                Upload a PDF and start a conversation.
+                Ask questions, explore ideas, and understand
+                your documents with AI.
+              </p>
 
+              <button
+                className="welcome-upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+                type="button"
+                disabled={uploading || asking}
+              >
+                <span>↑</span> Upload a PDF
+              </button>
 
-              <div className="answer-icon">
-                ✦
-              </div>
-
-
-              <div>
-
-                <h3>
-                  AI Answer
-                </h3>
-
-
-                <span>
-                  Generated from your uploaded document
-                </span>
-
-              </div>
-
-
-            </div>
-
-
-            {/* ANSWER */}
-
-            <div className="answer-content">
-
-
-              {asking ? (
-                  <div className="thinking">
-                    <span className="thinking-spinner"></span>
-                    <span>
-                      Searching your document and generating an answer...
-                    </span>
-                  </div>
-                ) : (
-                  <p>
-                    {answer}
-                  </p>
-                )}
-
-            </div>
-
-
-            {/* SOURCES */}
-
-            {!asking &&
-              sources.length > 0 && (
-
-                <div className="sources">
-
-
-                  <h4>
-                    Sources
-                  </h4>
-
-
-                  {Object.values(
-                    groupedSources
-                  ).map(
-                    (texts, index) => (
-
-                      <div
-                        className="source-page-group"
-                        key={index}
-                      >
-
-
-                        {texts.map(
-                          (text, textIndex) => (
-
-                            <div
-                              className="source-text"
-                              key={textIndex}
-                            >
-
-                              • {text}
-
-                            </div>
-
-                          )
-                        )}
-
-                      </div>
-
-                    )
-                  )}
-
+              <div className="welcome-features">
+                <div>
+                  <span>📄</span>
+                  <strong>Document Q&A</strong>
+                  <small>Get answers from your PDF</small>
                 </div>
+                <div>
+                  <span>🔎</span>
+                  <strong>Smart Search</strong>
+                  <small>Find relevant information</small>
+                </div>
+                <div>
+                  <span>🔒</span>
+                  <strong>Local AI</strong>
+                  <small>Runs on your machine</small>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="messages-container">
+              {messages.map((message) => (
+                <div
+                  className={`message-row ${message.role}`}
+                  key={message.id}
+                >
+                  <div className="message-avatar">
+                    {message.role === "assistant" ? "✦" : "You"}
+                  </div>
 
+                  <div className="message-body">
+                    <span className="message-author">
+                      {message.role === "assistant" ? "DocuMind" : "You"}
+                    </span>
+
+                    <div
+                      className={`message-bubble ${
+                        message.isError ? "message-error" : ""
+                      }`}
+                    >
+                      <div className="markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {normalizeMarkdown(message.content)}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+
+                    {message.role === "assistant" &&
+                      message.sources?.length > 0 && (
+                        <details className="message-sources">
+                          <summary>
+                            📄 View sources ({message.sources.length})
+                          </summary>
+
+                          {message.sources.map((source, index) => (
+                            <div
+                              className="source-item"
+                              key={`${message.id}-${index}`}
+                            >
+                              <strong>
+                                Page {source.page ?? "Unknown"}
+                              </strong>
+                              <p>{source.text}</p>
+                            </div>
+                          ))}
+                        </details>
+                      )}
+                  </div>
+                </div>
+              ))}
+
+              {asking && (
+                <div className="message-row assistant">
+                  <div className="message-avatar">✦</div>
+                  <div className="message-body">
+                    <span className="message-author">DocuMind</span>
+                    <div className="thinking-bubble">
+                      <span className="thinking-dot" />
+                      <span className="thinking-dot" />
+                      <span className="thinking-dot" />
+                      <span>Thinking...</span>
+                    </div>
+                  </div>
+                </div>
               )}
 
-          </section>
-
-        )}
-
-
-        {/* =========================
-            FEATURES
-        ========================= */}
-
-        <section className="features">
-
-
-          <div className="feature">
-
-            <div>
-              📄
+              <div ref={messagesEndRef} />
             </div>
-
-            <strong>
-              Document-aware
-            </strong>
-
-            <span>
-              Answers based on your uploaded PDF
-            </span>
-
-          </div>
-
-
-          <div className="feature">
-
-            <div>
-              ⚡
-            </div>
-
-            <strong>
-              Semantic Search
-            </strong>
-
-            <span>
-              Finds relevant information using embeddings
-            </span>
-
-          </div>
-
-
-          <div className="feature">
-
-            <div>
-              🔒
-            </div>
-
-            <strong>
-              Runs Locally
-            </strong>
-
-            <span>
-              Your documents stay on your machine
-            </span>
-
-          </div>
-
-
+          )}
         </section>
 
+        {/* CHAT INPUT */}
+        <footer className="chat-footer">
+          {documentUploaded && messages.length <= 1 && (
+            <div className="suggestion-list">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={asking || uploading}
+                  onClick={() => handleAsk(suggestion)}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
 
+          <form className="chat-input-box" onSubmit={handleSubmit}>
+            <textarea
+              ref={textareaRef}
+              placeholder={
+                documentUploaded
+                  ? "Ask anything about your document..."
+                  : "Upload a PDF to start chatting..."
+              }
+              value={question}
+              disabled={!documentUploaded || asking || uploading}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  handleSubmit(event);
+                }
+              }}
+              rows={1}
+            />
+
+            <div className="input-bottom">
+              <span>Enter to send · Shift + Enter for a new line</span>
+
+              <button
+                type="submit"
+                disabled={
+                  !documentUploaded ||
+                  !question.trim() ||
+                  asking ||
+                  uploading
+                }
+                aria-label="Send message"
+              >
+                ↑
+              </button>
+            </div>
+          </form>
+
+          <p className="disclaimer">
+            DocuMind can make mistakes. Verify important information
+            with your original document.
+          </p>
+        </footer>
       </main>
-
-
-      {/* =========================
-          FOOTER
-      ========================= */}
-
-      <footer>
-
-        <span>
-          DocuMind
-        </span>
-
-        <span>
-          •
-        </span>
-
-        <span>
-          Built with React + FastAPI + RAG + Ollama
-        </span>
-
-      </footer>
-
-
     </div>
-
   );
 }
 

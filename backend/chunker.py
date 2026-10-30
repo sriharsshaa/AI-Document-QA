@@ -1,94 +1,172 @@
 import re
 
 
+def normalize_text(text: str) -> str:
+    """Normalize whitespace while preserving paragraph boundaries."""
+
+    if not text:
+        return ""
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    paragraphs = []
+
+    for paragraph in text.split("\n"):
+        paragraph = re.sub(r"[ \t]+", " ", paragraph).strip()
+
+        if paragraph:
+            paragraphs.append(paragraph)
+
+    return "\n\n".join(paragraphs)
+
+
+def split_long_sentence(sentence: str, chunk_size: int) -> list[str]:
+    """
+    Split a sentence that exceeds chunk_size into smaller pieces.
+    Prefer word boundaries; split exceptionally long words if needed.
+    """
+
+    words = sentence.split()
+    pieces = []
+    current = ""
+
+    for word in words:
+
+        # Handle a single word longer than the chunk size.
+        if len(word) > chunk_size:
+
+            if current:
+                pieces.append(current)
+                current = ""
+
+            for start in range(0, len(word), chunk_size):
+                pieces.append(word[start:start + chunk_size])
+
+            continue
+
+        candidate = f"{current} {word}".strip()
+
+        if len(candidate) <= chunk_size:
+            current = candidate
+        else:
+            if current:
+                pieces.append(current)
+
+            current = word
+
+    if current:
+        pieces.append(current)
+
+    return pieces
+
+
+def get_overlap_text(text: str, overlap: int) -> str:
+    """Get a word-boundary-safe suffix for the next chunk."""
+
+    if overlap <= 0 or not text:
+        return ""
+
+    overlap_text = text[-overlap:]
+
+    # Avoid starting in the middle of a word.
+    first_space = overlap_text.find(" ")
+
+    if first_space != -1:
+        overlap_text = overlap_text[first_space + 1:]
+
+    return overlap_text.strip()
+
+
 def split_text(
     text: str,
     chunk_size: int = 700,
     overlap: int = 100
-):
+) -> list[str]:
     """
-    Split text into chunks with character overlap.
+    Split text into chunks while preserving sentence boundaries
+    where possible.
 
-    chunk_size:
-        Maximum target size of each chunk.
+    Args:
+        text: Input text.
+        chunk_size: Maximum number of characters per chunk.
+        overlap: Approximate number of overlapping characters.
 
-    overlap:
-        Number of characters from the previous chunk
-        carried into the next chunk.
+    Returns:
+        A list of text chunks.
     """
 
-    if not text or not text.strip():
-        return []
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than zero.")
+
+    if overlap < 0:
+        raise ValueError("overlap cannot be negative.")
 
     if overlap >= chunk_size:
-        raise ValueError(
-            "overlap must be smaller than chunk_size"
+        raise ValueError("overlap must be smaller than chunk_size.")
+
+    text = normalize_text(text)
+
+    if not text:
+        return []
+
+    # Split into paragraphs first, then sentences.
+    paragraphs = re.split(r"\n+", text)
+
+    units = []
+
+    for paragraph in paragraphs:
+
+        sentences = re.split(
+            r"(?<=[.!?])\s+",
+            paragraph.strip()
         )
 
-    # Normalize whitespace
-    text = re.sub(r"\s+", " ", text).strip()
+        for sentence in sentences:
 
-    # Split into sentences
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text
-    )
+            sentence = sentence.strip()
+
+            if not sentence:
+                continue
+
+            if len(sentence) > chunk_size:
+                units.extend(
+                    split_long_sentence(sentence, chunk_size)
+                )
+            else:
+                units.append(sentence)
 
     chunks = []
     current_chunk = ""
 
-    for sentence in sentences:
+    for unit in units:
 
-        sentence = sentence.strip()
+        candidate = f"{current_chunk} {unit}".strip()
 
-        if not sentence:
+        if len(candidate) <= chunk_size:
+            current_chunk = candidate
             continue
 
-        # Add sentence if it fits
-        if (
-            not current_chunk
-            or len(current_chunk) + len(sentence) + 1
-            <= chunk_size
-        ):
-            if current_chunk:
-                current_chunk += " "
+        # Save the current chunk.
+        if current_chunk:
+            chunks.append(current_chunk)
 
-            current_chunk += sentence
-
-        else:
-            # Save current chunk
-            chunks.append(
-                current_chunk.strip()
-            )
-
-            # Create overlap from the end
-            # of the previous chunk
-            overlap_text = current_chunk[
-                max(0, len(current_chunk) - overlap):
-            ]
-
-            # Avoid starting in the middle of a word
-            if " " in overlap_text:
-                overlap_text = overlap_text[
-                    overlap_text.find(" ") + 1:
-                ]
-
-            current_chunk = (
-                overlap_text.strip()
-                + " "
-                + sentence
-            ).strip()
-
-            # If the resulting chunk is still too large,
-            # keep the sentence as the new chunk.
-            if len(current_chunk) > chunk_size:
-                current_chunk = sentence
-
-    # Add final chunk
-    if current_chunk.strip():
-        chunks.append(
-            current_chunk.strip()
+        # Carry a small suffix into the next chunk.
+        overlap_text = get_overlap_text(
+            current_chunk,
+            overlap
         )
+
+        # Ensure overlap + next unit never exceeds chunk_size.
+        available_space = chunk_size - len(unit) - 1
+
+        if available_space <= 0:
+            current_chunk = unit
+        else:
+            overlap_text = overlap_text[:available_space].strip()
+            current_chunk = f"{overlap_text} {unit}".strip()
+
+    if current_chunk:
+        chunks.append(current_chunk)
 
     return chunks
 
@@ -99,15 +177,22 @@ def create_page_chunks(
     overlap=100
 ):
     """
-    Create chunks while preserving page numbers.
+    Create chunks independently for each PDF page.
+
+    Each chunk retains its original page number.
+    Overlap is not carried across different pages.
     """
 
     all_chunks = []
 
-    for page in pages:
+    for page_number, page in enumerate(pages, start=1):
+
+        page_text = page.get("text", "")
+
+        page_label = page.get("page", page_number)
 
         page_chunks = split_text(
-            page["text"],
+            page_text,
             chunk_size=chunk_size,
             overlap=overlap
         )
@@ -115,7 +200,7 @@ def create_page_chunks(
         for chunk in page_chunks:
 
             all_chunks.append({
-                "page": page["page"],
+                "page": page_label,
                 "text": chunk
             })
 
